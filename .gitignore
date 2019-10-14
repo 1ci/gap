@@ -1,0 +1,8 @@
+include/
+compiled/
+
+spcomp.exe
+compile.exe
+
+*.smx
+*.dat
