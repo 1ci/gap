@@ -6,3 +6,6 @@ compile.exe
 
 *.smx
 *.dat
+
+*.code-workspace
+.vscode/
