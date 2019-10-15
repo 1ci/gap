@@ -19,7 +19,7 @@ Handle gPreviewTimer[MAXPLAYERS + 1];
 bool gShowCursor[MAXPLAYERS + 1];
 
 int gSnapToGrid[MAXPLAYERS + 1];
-int gSnapValues[] = {0, 1, 2, 5, 10};
+int gSnapValues[] = {0, 1, 2, 4, 8, 16};
 
 ConVar gCvarBeamMaterial;
 int gModelIndex;
@@ -218,7 +218,7 @@ public int handler(Menu menu, MenuAction action, int client, int item)
 					float distance = GetDistance(startPos, endPos);
 					float difference[3];
 					SubtractVectors(endPos, startPos, difference);
-					
+
 					Print2(client, "{CHAT}Distance: {YELLOWORANGE}%.2f {CHAT}dx: {YELLOWORANGE}%.2f {CHAT}dy: {YELLOWORANGE}%.2f {CHAT}dz: {YELLOWORANGE}%.2f", 
 									distance,
 									difference[0], difference[1], difference[2]);
