@@ -1,23 +1,51 @@
 #include <sourcemod>
 #include <sdktools>
+#include "colors.sp"
 
 #define POINT_A 0
 #define POINT_B 1
 #define NUM_POINTS 2
+#define CURSOR_TIME GetTickInterval() * 10.0
 #define PREVIEW_TIME 1.0
 #define RING_START_RADIUS 7.0
 #define RING_END_RADIUS 7.7
+#define CURSOR_SIZE 3.0
 
-bool gPreview[MAXPLAYERS + 1];
+bool gGap[MAXPLAYERS + 1];
 int gCurrPoint[MAXPLAYERS + 1];
 float gPointPos[MAXPLAYERS + 1][NUM_POINTS][3];
+Handle gCursorTimer[MAXPLAYERS + 1];
 Handle gPreviewTimer[MAXPLAYERS + 1];
+bool gShowCursor[MAXPLAYERS + 1];
+
+int gSnapToGrid[MAXPLAYERS + 1];
+int gSnapValues[] = {0, 1, 2, 5, 10};
 
 ConVar gCvarBeamMaterial;
 int gModelIndex;
 int gColorRed[4] = {255, 0, 0, 255};
 int gColorGreen[4] = {0, 255, 0, 255};
 int gColorWhite[4] = {255, 255, 255, 255};
+
+float gCursorStart[3][3] = 
+{
+	{CURSOR_SIZE, 0.0, 0.0},
+	{0.0, CURSOR_SIZE, 0.0},
+	{0.0, 0.0, CURSOR_SIZE}
+};
+
+float gCursorEnd[3][3] = 
+{
+	{-CURSOR_SIZE, 0.0, 0.0},
+	{0.0, -CURSOR_SIZE, 0.0},
+	{0.0, 0.0, -CURSOR_SIZE}
+};
+
+enum struct Line
+{
+	float start[3];
+	float end[3];
+}
 
 public void OnPluginStart()
 {
@@ -52,50 +80,110 @@ public Action ConCmd_Gap(int client, int args)
 	return Plugin_Handled;
 }
 
-public void OnPlayerRunCmdPost(int client, int buttons, int impulse, 
-						const float vel[3], const float angles[3], 
-						int weapon, int subtype, int cmdnum, 
-						int tickcount, int seed, const int mouse[2])
-{
-	if (!gPreview[client])
-	{
-		return;
-	}
-
-	if (gCurrPoint[client] == POINT_B)
-	{
-		float endPos[3];
-
-		if (!GetAimPosition(client, endPos))
-		{
-			return;
-		}
-
-		DrawLine(client, gPointPos[ client ][ POINT_A ], endPos, GetTickInterval() * 20, gColorWhite);
-	}
-}
-
 void OpenMenu(int client)
 {
 	Panel panel = new Panel();
 
 	panel.SetTitle("Gap");
 	panel.DrawItem("Select point");
-	//panel.DrawItem("Snapping: off");
+
+	// Feeling kinda lazy today
+	if (gShowCursor[client])
+	{
+		panel.DrawItem("Show cursor: on");
+	}
+	else
+	{
+		panel.DrawItem("Show cursor: off");
+	}
+	
+	if (gSnapToGrid[client] == 0)
+	{
+		panel.DrawItem("Snap to grid: off");
+	}
+	else
+	{
+		char gridText[32];
+		FormatEx(gridText, sizeof(gridText), "Snap to grid: %d", gSnapValues[ gSnapToGrid[client] ] );
+		panel.DrawItem(gridText);
+	}
 
 	panel.CurrentKey = 10;
 	panel.DrawItem("Exit", ITEMDRAW_CONTROL);
 
-	gPreview[client] = panel.Send(client, handler, MENU_TIME_FOREVER);
+	gGap[client] = panel.Send(client, handler, MENU_TIME_FOREVER);
+
+	if (gGap[client])
+	{
+		if (gCursorTimer[client] != null)
+		{
+			KillTimer(gCursorTimer[client]);
+			gCursorTimer[client] = null;
+		}
+		gCursorTimer[client] = CreateTimer(CURSOR_TIME, Cursor, GetClientUserId(client), .flags = TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+	}
 
 	delete panel;
+}
+
+public Action Cursor(Handle timer, int userid)
+{
+	int client = GetClientOfUserId(userid);
+	if (!client || !gGap[client])
+	{
+		gCursorTimer[client] = null;
+		return Plugin_Stop;
+	}
+
+	if (gCurrPoint[client] == POINT_A)
+	{
+		float endPos[3];
+
+		if (!GetAimPosition(client, endPos))
+		{
+			return Plugin_Continue;
+		}
+
+		DrawCursor(client, endPos, 1.0, CURSOR_TIME, gColorWhite);
+	}
+	else if (gCurrPoint[client] == POINT_B)
+	{
+		float endPos[3];
+
+		if (!GetAimPosition(client, endPos))
+		{
+			return Plugin_Continue;
+		}
+
+		float startPos[3];
+		startPos = gPointPos[client][ POINT_A ];
+
+		DrawRing(client, startPos, RING_START_RADIUS, RING_END_RADIUS, CURSOR_TIME, gColorGreen, FBEAM_FADEIN);
+		DrawCursor(client, endPos, 1.0, CURSOR_TIME, gColorWhite);
+		DrawLine(client, gPointPos[ client ][ POINT_A ], endPos, 1.0, CURSOR_TIME, gColorWhite);
+	}
+
+	return Plugin_Continue;
 }
 
 public int handler(Menu menu, MenuAction action, int client, int item)
 {
 	if (action != MenuAction_Select)
 	{
-		gPreview[client] = false;
+		gGap[client] = false;
+
+		if (gPreviewTimer[client] != null)
+		{
+			KillTimer(gPreviewTimer[client]);
+			gPreviewTimer[client] = null;
+		}
+
+		if (gCursorTimer[client] != null)
+		{
+			KillTimer(gCursorTimer[client]);
+			gCursorTimer[client] = null;
+		}
+
 		return 0;
 	}
 
@@ -124,39 +212,64 @@ public int handler(Menu menu, MenuAction action, int client, int item)
 					// Draw a line between the two points
 					DrawRing(client, startPos, RING_START_RADIUS, RING_END_RADIUS, PREVIEW_TIME, gColorGreen, FBEAM_FADEIN);
 					DrawRing(client, endPos, RING_START_RADIUS, RING_END_RADIUS, PREVIEW_TIME, gColorRed, FBEAM_FADEIN);
-					DrawLine(client, startPos, endPos, PREVIEW_TIME, gColorWhite);
-					gPreviewTimer[client] = CreateTimer(PREVIEW_TIME, CompleteGap, client, .flags = TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+					DrawLine(client, startPos, endPos, 1.0, PREVIEW_TIME, gColorWhite);
+					gPreviewTimer[client] = CreateTimer(PREVIEW_TIME, CompleteGap, GetClientUserId(client), .flags = TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 
 					float distance = GetDistance(startPos, endPos);
-					PrintToChat(client, "Distance: %.2f", distance);
+					float difference[3];
+					SubtractVectors(endPos, startPos, difference);
+					
+					Print2(client, "{CHAT}Distance: {YELLOWORANGE}%.2f {CHAT}dx: {YELLOWORANGE}%.2f {CHAT}dy: {YELLOWORANGE}%.2f {CHAT}dz: {YELLOWORANGE}%.2f", 
+									distance,
+									difference[0], difference[1], difference[2]);
 
 					gCurrPoint[client] = POINT_A;
 				}
 			}
 			else
 			{
-				PrintToChat(client, "Couldn't get point position (raytrace did not hit). Try again.");
+				Print2(client, "{CHAT}Couldn't get point position (raytrace did not hit). Try again.");
 			}
 			OpenMenu(client);
 		}
-		case 2: // Snapping
+		case 2: // Show cursor
 		{
-			// TODO: Add snap to grid options
+			gShowCursor[client] = !gShowCursor[client];
+			OpenMenu(client);
+		}
+		case 3: // Snap to grid
+		{
+			gSnapToGrid[client]++;
+			gSnapToGrid[client] = gSnapToGrid[client] % sizeof(gSnapValues);
+			
 			OpenMenu(client);
 		}
 		case 10:
 		{
-			gPreview[client] = false;
+			gGap[client] = false;
+
+			if (gPreviewTimer[client] != null)
+			{
+				KillTimer(gPreviewTimer[client]);
+				gPreviewTimer[client] = null;
+			}
+
+			if (gCursorTimer[client] != null)
+			{
+				KillTimer(gCursorTimer[client]);
+				gCursorTimer[client] = null;
+			}
 		}
 	}
 	return 0;
 }
 
-public Action CompleteGap(Handle timer, int client)
+public Action CompleteGap(Handle timer, int userid)
 {
-	if (!gPreview[client])
+	int client = GetClientOfUserId(userid);
+	if (!client || !gGap[client])
 	{
-		gPreviewTimer[client] = null
+		gPreviewTimer[client] = null;
 		return Plugin_Stop;
 	}
 
@@ -167,7 +280,7 @@ public Action CompleteGap(Handle timer, int client)
 
 	DrawRing(client, startPos, RING_START_RADIUS, RING_END_RADIUS, PREVIEW_TIME, gColorGreen, FBEAM_FADEIN);
 	DrawRing(client, endPos, RING_START_RADIUS, RING_END_RADIUS, PREVIEW_TIME, gColorRed, FBEAM_FADEIN);
-	DrawLine(client, startPos, endPos, PREVIEW_TIME, gColorWhite);
+	DrawLine(client, startPos, endPos, 1.0, PREVIEW_TIME, gColorWhite);
 
 	return Plugin_Continue;
 }
@@ -188,6 +301,11 @@ bool GetAimPosition(int client, float endPosition[3])
 	if (TR_DidHit(null))
 	{
 		TR_GetEndPosition(endPosition, null);
+
+		if (gSnapToGrid[client])
+		{
+			endPosition = SnapToGrid(endPosition, gSnapValues[ gSnapToGrid[client] ], true);
+		}
 		return true;
 	}
 	return false;
@@ -199,7 +317,7 @@ public bool TraceFilter(int entity, int contentsMask)
 	return !(0 < entity && entity <= MaxClients);
 }
 
-stock void DrawLine(int client, float start[3], float end[3], float life, int color[4])
+stock void DrawLine(int client, float start[3], float end[3], float width, float life, int color[4])
 {
 	float origin[3];
 	GetClientAbsOrigin(client, origin);
@@ -210,8 +328,8 @@ stock void DrawLine(int client, float start[3], float end[3], float life, int co
 				.StartFrame = 0, 
 				.FrameRate = 0,
 				.Life = life,
-				.Width = 1.0,
-				.EndWidth = 1.0,
+				.Width = width,
+				.EndWidth = width,
 				.FadeLength = 0,
 				.Amplitude = 0.0,
 				.Color = color,
@@ -242,15 +360,53 @@ stock void DrawRing(int client, float center[3], float startRadius, float endRad
 	TE_SendToAllInRange(origin, RangeType_Visibility, .delay = 0.0);
 }
 
+stock void DrawCursor(int client, float center[3], float width, float life, int color[4])
+{
+	if (!gShowCursor[client])
+	{
+		return;
+	}
+
+	Line line[3];
+
+	for (int i = 0; i < 3; i++)
+	{
+		line[ i ].start = gCursorStart[ i ];
+		line[ i ].end = gCursorEnd[ i ];
+
+		//RotateClockwise(line[ i ].start, 45.0);
+		//RotateClockwise(line[ i ].end, 45.0);
+
+		AddVectors(center, line[ i ].start, line[ i ].start);
+		AddVectors(center, line[ i ].end, line[ i ].end);
+
+		DrawLine(client, line[ i ].start, line[ i ].end, width, life, color);
+	}
+}
+
 void ResetVariables(int client)
 {
-	gPreview[client] = false;
+	gGap[client] = false;
 	gCurrPoint[client] = POINT_A;
-	gPreviewTimer[client] = null;
 
 	for (int i = 0; i < NUM_POINTS; i++)
 	{
 		gPointPos[client][i] = NULL_VECTOR;
+	}
+
+	gSnapToGrid[client] = 0; // off
+	gShowCursor[client] = true;
+
+	if (gPreviewTimer[client] != null)
+	{
+		KillTimer(gPreviewTimer[client]);
+		gPreviewTimer[client] = null;
+	}
+	
+	if (gCursorTimer[client] != null)
+	{
+		KillTimer(gCursorTimer[client]);
+		gCursorTimer[client] = null;
 	}
 }
 
@@ -259,4 +415,29 @@ float GetDistance(float startPos[3], float endPos[3])
 	float difference[3];
 	SubtractVectors(endPos, startPos, difference);
 	return GetVectorLength(difference);
+}
+
+stock float[] SnapToGrid(float pos[3], int grid, bool third)
+{
+    float origin[3];
+    origin = pos;
+
+    origin[0] = float(RoundToNearest(pos[0] / grid) * grid);
+    origin[1] = float(RoundToNearest(pos[1] / grid) * grid);
+    
+    if(third)
+    {
+        origin[2] = float(RoundToNearest(pos[2] / grid) * grid);
+    }
+
+    return origin;
+}
+
+stock void RotateClockwise(float p[3], float angle) // 2d
+{
+	float s = Sine( DegToRad(angle) );
+	float c = Cosine( DegToRad(angle) );
+
+	p[0] = p[0] * c + p[1] * s;
+	p[1] = p[1] * c - p[0] * s;
 }
