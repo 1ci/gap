@@ -1,4 +1,5 @@
 #include <sourcemod>
+#include <cstrike>
 #include <sdktools>
 #include "colors.sp"
 
@@ -10,6 +11,15 @@
 #define RING_START_RADIUS 7.0
 #define RING_END_RADIUS 7.7
 #define CURSOR_SIZE 3.0
+
+public Plugin myinfo =
+{
+	name = "Gap",
+	author = "ici, velocity calculation by Saul and implemented by Charles_(hypnos)",
+	description = "",
+	version = "1.0",
+	url = ""
+}
 
 bool gGap[MAXPLAYERS + 1];
 int gCurrPoint[MAXPLAYERS + 1];
@@ -27,14 +37,16 @@ int gColorRed[4] = {255, 0, 0, 255};
 int gColorGreen[4] = {0, 255, 0, 255};
 int gColorWhite[4] = {255, 255, 255, 255};
 
-float gCursorStart[3][3] = 
+float gGravity;
+
+float gCursorStart[3][3] =
 {
 	{CURSOR_SIZE, 0.0, 0.0},
 	{0.0, CURSOR_SIZE, 0.0},
 	{0.0, 0.0, CURSOR_SIZE}
 };
 
-float gCursorEnd[3][3] = 
+float gCursorEnd[3][3] =
 {
 	{-CURSOR_SIZE, 0.0, 0.0},
 	{0.0, -CURSOR_SIZE, 0.0},
@@ -49,11 +61,26 @@ enum struct Line
 
 public void OnPluginStart()
 {
+	EngineVersion engine = GetEngineVersion();
+	if (engine != Engine_CSS)
+	{
+		SetFailState("Game is not supported yet. Soon™");
+	}
+
 	RegConsoleCmd("sm_gap", ConCmd_Gap, "Activates the feature", .flags = 0)
+
+	ConVar sv_gravity = FindConVar("sv_gravity");
+	sv_gravity.AddChangeHook(OnGravityChanged);
+	gGravity = sv_gravity.FloatValue;
 
 	// sprites/laser.vmt
 	// sprites/laserbeam.vmt
 	gCvarBeamMaterial = CreateConVar("gap_beams_material", "sprites/laser.vmt", "Material used for beams. Server restart needed for this to take effect.");
+}
+
+public void OnGravityChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	gGravity = StringToFloat(newValue);
 }
 
 public void OnClientPutInServer(int client)
@@ -96,7 +123,7 @@ void OpenMenu(int client)
 	{
 		panel.DrawItem("Show cursor: off");
 	}
-	
+
 	if (gSnapToGrid[client] == 0)
 	{
 		panel.DrawItem("Snap to grid: off");
@@ -124,6 +151,7 @@ void OpenMenu(int client)
 	}
 
 	delete panel;
+	gCursorTimer[client] = null;
 }
 
 public Action Cursor(Handle timer, int userid)
@@ -219,9 +247,54 @@ public int handler(Menu menu, MenuAction action, int client, int item)
 					float difference[3];
 					SubtractVectors(endPos, startPos, difference);
 
-					Print2(client, "{CHAT}Distance: {YELLOWORANGE}%.2f {CHAT}dx: {YELLOWORANGE}%.2f {CHAT}dy: {YELLOWORANGE}%.2f {CHAT}dz: {YELLOWORANGE}%.2f", 
+					if(difference[2] > 65)
+					{
+						Print2(client, "{CHAT}Distance: {YELLOWORANGE}%.2f {CHAT}DiifX: {YELLOWORANGE}%.2f {CHAT}DiffY: {YELLOWORANGE}%.2f {CHAT}DiffZ: {YELLOWORANGE}%.2f {CHAT}MinVelocity: {YELLOWORANGE}Impossible Jump ΔZ>65",
 									distance,
 									difference[0], difference[1], difference[2]);
+					}
+					else
+					{
+						// Credit to Saul for velocity calculations
+						float gFallTime, gFallHeight, gFallVelocity;
+
+						if (difference[2] > 64)
+						{
+							gFallHeight = 65 - difference[2]; // z distance from top of jump to selected point, assuming sv_gravity 800 is used.
+						}
+						else
+						{
+							gFallHeight = 64 - difference[2];
+						}
+
+						float m_flGravity = GetEntityGravity(client);
+
+						float g_flGravityTick = SquareRoot(2 * 800 * 57.0) - (gGravity  * m_flGravity * 1.5 * GetTickInterval());
+						gFallVelocity = -1 * SquareRoot(2 * gGravity * m_flGravity * gFallHeight); // z velocity player should have right before hitting the ground
+						gFallTime = -1 * (gFallVelocity - g_flGravityTick) / gGravity * m_flGravity; // The amount of time the jump should have taken
+
+						float gInitialVel[3];
+
+						gInitialVel[0] = (endPos[0] - startPos[0]) / gFallTime; // Minimum velocity needed in x and y directions
+						gInitialVel[1] = (endPos[1] - startPos[1]) / gFallTime; // to reach the destination
+
+						float gMinVel = SquareRoot(Pow(gInitialVel[0], 2.0) + Pow(gInitialVel[1], 2.0));
+						float gInitialTick = Pow((gMinVel - 16.97) / 30.02, 1 / 0.5029);
+						float gFallTimeTicks = gFallTime * (1/GetTickInterval()); // carnifex' fault if it bugs
+						float gVelGain = (30.02 * Pow(gInitialTick + gFallTimeTicks, 0.5029) + 16.97) - (30.02 * Pow(gInitialTick, 0.5029) + 16.97);
+						float gMinVelOneTick = gMinVel - gVelGain;
+
+						if(gMinVelOneTick < 0 || gMinVel < 16.97)
+						{
+							gMinVelOneTick = 0.0;
+						}
+
+
+						// Credit to Charles_(hyonos) for the implementation of velocity stuff (https://hyps.dev/)
+						Print2(client, "{CHAT}Distance: {YELLOWORANGE}%.2f {CHAT}DiifX: {YELLOWORANGE}%.2f {CHAT}DiffY: {YELLOWORANGE}%.2f {CHAT}DiffZ: {YELLOWORANGE}%.2f {CHAT}MinVelocity: {YELLOWORANGE}%.2f {CHAT}MinVelocityWith1Tick: {YELLOWORANGE}%.2f",
+										distance,
+										difference[0], difference[1], difference[2], gMinVel, gMinVelOneTick);
+					}
 
 					gCurrPoint[client] = POINT_A;
 				}
@@ -241,7 +314,7 @@ public int handler(Menu menu, MenuAction action, int client, int item)
 		{
 			gSnapToGrid[client]++;
 			gSnapToGrid[client] = gSnapToGrid[client] % sizeof(gSnapValues);
-			
+
 			OpenMenu(client);
 		}
 		case 10:
@@ -260,6 +333,7 @@ public int handler(Menu menu, MenuAction action, int client, int item)
 				gCursorTimer[client] = null;
 			}
 		}
+
 	}
 	return 0;
 }
@@ -322,10 +396,10 @@ stock void DrawLine(int client, float start[3], float end[3], float width, float
 	float origin[3];
 	GetClientAbsOrigin(client, origin);
 
-	TE_SetupBeamPoints(start, end, 
-				.ModelIndex = gModelIndex, 
-				.HaloIndex = 0, 
-				.StartFrame = 0, 
+	TE_SetupBeamPoints(start, end,
+				.ModelIndex = gModelIndex,
+				.HaloIndex = 0,
+				.StartFrame = 0,
 				.FrameRate = 0,
 				.Life = life,
 				.Width = width,
@@ -334,7 +408,7 @@ stock void DrawLine(int client, float start[3], float end[3], float width, float
 				.Amplitude = 0.0,
 				.Color = color,
 				.Speed = 0);
-	
+
 	TE_SendToAllInRange(origin, RangeType_Visibility, .delay = 0.0);
 }
 
@@ -343,7 +417,7 @@ stock void DrawRing(int client, float center[3], float startRadius, float endRad
 	float origin[3];
 	GetClientAbsOrigin(client, origin);
 
-	TE_SetupBeamRingPoint(center, 
+	TE_SetupBeamRingPoint(center,
 				.Start_Radius = startRadius,
 				.End_Radius = endRadius,
 				.ModelIndex = gModelIndex,
@@ -356,7 +430,7 @@ stock void DrawRing(int client, float center[3], float startRadius, float endRad
 				.Color = color,
 				.Speed = 3,
 				.Flags = flags);
-	
+
 	TE_SendToAllInRange(origin, RangeType_Visibility, .delay = 0.0);
 }
 
@@ -402,7 +476,7 @@ void ResetVariables(int client)
 		KillTimer(gPreviewTimer[client]);
 		gPreviewTimer[client] = null;
 	}
-	
+
 	if (gCursorTimer[client] != null)
 	{
 		KillTimer(gCursorTimer[client]);
@@ -424,7 +498,7 @@ stock float[] SnapToGrid(float pos[3], int grid, bool third)
 
     origin[0] = float(RoundToNearest(pos[0] / grid) * grid);
     origin[1] = float(RoundToNearest(pos[1] / grid) * grid);
-    
+
     if(third)
     {
         origin[2] = float(RoundToNearest(pos[2] / grid) * grid);
