@@ -151,7 +151,6 @@ void OpenMenu(int client)
 	}
 
 	delete panel;
-	gCursorTimer[client] = null;
 }
 
 public Action Cursor(Handle timer, int userid)
